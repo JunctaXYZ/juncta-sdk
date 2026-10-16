@@ -75,7 +75,7 @@ jobs:
           # policy around them changes: manifests, toolchain pins, registry
           # config, vendored tools, and this workflow itself. Otherwise a pull
           # request could loosen an audit without the audit running.
-          deps_re='(^|/)(Cargo\.(lock|toml)|go\.(mod|sum)|pnpm-lock\.yaml|package\.json|uv\.lock|requirements[^/]*\.txt|deny\.toml|rust-toolchain(\.toml)?)$'
+          deps_re='(^|/)(Cargo\.(lock|toml)|go\.(mod|sum)|pnpm-lock\.yaml|package\.json|pnpm-workspace\.yaml|\.npmrc|\.nvmrc|uv\.lock|requirements[^/]*\.txt|deny\.toml|rust-toolchain(\.toml)?)$'
           deps_re="$deps_re"'|(^|/)\.cargo/|^tools/|^\.github/workflows/security\.yml$|^\.github/dependabot\.yml$'
           # Semgrep skips a change only when every file in it is prose or an
           # image. Listing what to skip, rather than which languages to scan,

@@ -167,6 +167,15 @@ change Cargo.lock
 run_filter
 expect "a lockfile change runs the audits" deps=true code=true
 
+# pnpm settings decide which install scripts may run, and the Node pin
+# picks the runtime, so each one reruns the audits on its own.
+for settings in pnpm-workspace.yaml .npmrc .nvmrc packages/web/.npmrc; do
+  new_repo
+  change "$settings"
+  run_filter
+  expect "a change to $settings runs the audits" deps=true
+done
+
 new_repo
 change .github/workflows/ci.yml
 run_filter
