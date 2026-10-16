@@ -178,5 +178,13 @@ jobs:
         run: bash scripts/tests/pack_test.sh
       - name: Install and import the tarball
         run: bash scripts/tests/consume_test.sh
+      # pnpm has a built-in "docs" command that opens a browser and exits 0,
+      # so the script has another name, and the output must exist afterwards.
       - name: API docs
-        run: pnpm docs
+        run: |
+          rm -rf docs/api
+          pnpm run docs:api
+          if [ ! -f docs/api/README.md ]; then
+            echo "typedoc wrote no docs/api/README.md" >&2
+            exit 1
+          fi

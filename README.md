@@ -40,7 +40,7 @@ pnpm test
 | `pnpm format:check`         | prettier check                                                          |
 | `pnpm coverage`             | Tests with coverage; fails under the committed `coverage-baseline.json` |
 | `pnpm publint`, `pnpm attw` | Check the packed package's `exports` and types (run `pnpm build` first) |
-| `pnpm docs`                 | API reference as markdown in `docs/api/`; any warning fails it          |
+| `pnpm run docs:api`         | API reference as markdown in `docs/api/`; any warning fails it          |
 
 `scripts/gate.sh` is the full local gate and runs every check CI runs, including gitleaks, osv-scanner, semgrep (through Docker), actionlint, zizmor and the script self-tests. It also needs gitleaks 8.30.1, actionlint 1.7.12 (both installed with checksums by `scripts/install-ci-tools.sh`), zizmor 1.30.1, osv-scanner 2.6.0, shellcheck 0.11.0, perl and Docker. `scripts/precommit.sh` runs the fast subset.
 

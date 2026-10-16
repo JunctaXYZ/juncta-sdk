@@ -94,7 +94,11 @@ pnpm exec publint --strict
 pnpm exec attw --pack . --profile esm-only
 scripts/tests/pack_test.sh
 scripts/tests/consume_test.sh
-pnpm docs
+# pnpm has a built-in "docs" command that opens a browser and exits 0, so
+# the script has another name, and the output must exist afterwards.
+rm -rf docs/api
+pnpm run docs:api
+[ -f docs/api/README.md ] || { echo "gate: typedoc wrote no docs/api/README.md" >&2; exit 1; }
 
 step "dependency audit"
 pnpm audit --audit-level low

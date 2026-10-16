@@ -37,7 +37,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "docs": "typedoc",
+    "docs:api": "typedoc",
     "publint": "publint --strict",
     "attw": "attw --pack . --profile esm-only"
   },
