@@ -29,6 +29,9 @@ test('package gate config goes to security review', () => {
     '.prettierrc.json',
     'prettier.config.js',
     'coverage-baseline.json',
+    // Release policy: publish access and how private packages are tagged.
+    '.changeset/config.json',
+    '.changeset/README.md',
     // Which install scripts may run, and the toolchain pins.
     'pnpm-workspace.yaml',
     '.npmrc',

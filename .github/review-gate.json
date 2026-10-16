@@ -57,6 +57,7 @@
         ".prettierignore",
         ".prettierrc*",
         "prettier.config.*",
+        ".changeset/**",
         ".nvmrc",
         ".github/review-gate.json"
       ],
