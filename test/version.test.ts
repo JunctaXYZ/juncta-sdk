@@ -9,6 +9,13 @@ describe('VERSION', () => {
     expect(sdk.VERSION).toBe(manifest.version);
   });
 
+  // A literal type would change the public types on every release and make
+  // a comparison with another version a type error for consumers.
+  // tsc rejects this comparison if VERSION has a literal type.
+  it('is typed as string, so comparing with another release compiles', () => {
+    expect(sdk.VERSION === '0.0.0-other').toBe(false);
+  });
+
   it('is the only export until the first feature lands', () => {
     expect(Object.keys(sdk)).toEqual(['VERSION']);
   });

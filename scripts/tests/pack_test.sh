@@ -11,7 +11,11 @@ root=$(cd "$(dirname "$0")/../.." && pwd -P)
 work=$(cd "$(mktemp -d)" && pwd -P)
 trap 'rm -rf -- "${work:?}"' EXIT
 
-(cd "$root" && pnpm pack --pack-destination "$work" >"$work/pack.log")
+if ! (cd "$root" && pnpm pack --pack-destination "$work" >"$work/pack.log" 2>&1); then
+  cat "$work/pack.log" >&2
+  echo "pack test: pnpm pack failed" >&2
+  exit 1
+fi
 shopt -s nullglob
 tarballs=("$work"/*.tgz)
 if [ "${#tarballs[@]}" -ne 1 ]; then
