@@ -4,7 +4,9 @@ name: branch-audit
 # this daily audit makes any change to main, staging or development that
 # skipped the review flow visible as an issue. Each run covers everything
 # since the last passing one, so missed runs leave no gap. On a public
-# repository the script sees that protection is enforced and exits early.
+# repository a branch is skipped only when its rulesets require pull
+# requests and the review-gate status and block force pushes and deletion;
+# every other branch is audited.
 on:
   schedule:
     - cron: "0 6 * * *"

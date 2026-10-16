@@ -1,7 +1,14 @@
 // Run with: node --test .github/scripts/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import run, { activityPeriod, auditBranch, issueTitle, triage, windowStart } from './branch-audit.mjs';
+import run, {
+  activityPeriod,
+  auditBranch,
+  issueTitle,
+  missingProtection,
+  triage,
+  windowStart,
+} from './branch-audit.mjs';
 
 const sha = (c) => c.repeat(40);
 const since = new Date('2026-10-04T06:00:00Z');
@@ -179,6 +186,7 @@ const lastRun = { event: 'schedule', head_branch: 'development', head_sha: sha('
 
 function fakeGithub({
   isPrivate = true,
+  rules = {},
   activityPages = {},
   comments = approvals,
   issues = [],
@@ -193,6 +201,7 @@ function fakeGithub({
   const statusReads = [];
   const runQueries = [];
   const issueQueries = [];
+  const rulesQueries = [];
   const page = (data) => ({ data });
   const github = {
     paginate: async (route, params, map) => {
@@ -216,6 +225,12 @@ function fakeGithub({
     rest: {
       repos: {
         get: async () => page({ private: isPrivate, default_branch: 'development' }),
+        getBranchRules: async (p) => {
+          rulesQueries.push(p.branch);
+          const r = rules[p.branch] ?? [];
+          if (r instanceof Error) throw r;
+          return page(r);
+        },
         getBranch: async (p) => {
           assert.equal(p.branch, 'development');
           return page({ commit: { sha: TIP } });
@@ -265,13 +280,31 @@ function fakeGithub({
       },
     },
   };
-  return { github, created, labels, configRefs, activityRequests, activityPeriods, statusReads, runQueries, issueQueries };
+  return {
+    github,
+    created,
+    labels,
+    configRefs,
+    activityRequests,
+    activityPeriods,
+    statusReads,
+    runQueries,
+    issueQueries,
+    rulesQueries,
+  };
 }
 
 const context = { repo: { owner: 'junctaxyz', repo: 'juncta-api' }, serverUrl: 'https://github.com', runId: 5 };
 const now = new Date('2026-10-06T06:00:00Z');
 function core() {
-  return { info() {}, warning() {}, failed: null, setFailed(m) { this.failed = m; } };
+  return {
+    infos: [],
+    warnings: [],
+    info(m) { this.infos.push(m); },
+    warning(m) { this.warnings.push(m); },
+    failed: null,
+    setFailed(m) { this.failed = m; },
+  };
 }
 const merge = act('pr_merge', sha('f'), sha('1'), mergedAt);
 
@@ -336,10 +369,84 @@ test('run labels the issue, fails the job and does not reopen an open issue', as
   assert.match(c2.failed, /0 new issue/);
 });
 
-test('run does nothing on a public repository', async () => {
+// Active rules that make a branch safe to leave unaudited.
+const FULL_RULES = [
+  { type: 'pull_request', parameters: { required_approving_review_count: 0 } },
+  { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'review-gate' }] } },
+  { type: 'non_fast_forward' },
+  { type: 'deletion' },
+];
+const ALL_PROTECTED = { main: FULL_RULES, staging: FULL_RULES, development: FULL_RULES };
+
+test('missingProtection names each rule a branch lacks', () => {
+  assert.deepEqual(missingProtection(FULL_RULES), []);
+  assert.deepEqual(missingProtection([]), [
+    'pull requests required',
+    'review-gate status required',
+    'force pushes blocked',
+    'deletion blocked',
+  ]);
+  const otherCheck = FULL_RULES.map((r) =>
+    r.type === 'required_status_checks'
+      ? { ...r, parameters: { required_status_checks: [{ context: 'ci' }] } }
+      : r,
+  );
+  assert.deepEqual(missingProtection(otherCheck), ['review-gate status required']);
+  assert.deepEqual(
+    missingProtection(FULL_RULES.filter((r) => r.type !== 'non_fast_forward')),
+    ['force pushes blocked'],
+  );
+});
+
+test('run audits a public repository whose branches are not protected', async () => {
   const fake = fakeGithub({ isPrivate: false, activityPages: { main: [[act('push', sha('8'), sha('9'))]] } });
-  assert.deepEqual(await run({ github: fake.github, context, core: core(), now }), []);
+  const c = core();
+  const v = await run({ github: fake.github, context, core: c, now });
+  assert.deepEqual(v.map((x) => x.reason), ['direct push by someone']);
+  assert.deepEqual(fake.created.map((i) => i.title), ['branch-audit: main 9999999']);
+  assert.match(c.failed, /1 branch audit finding/);
+  assert.deepEqual(fake.rulesQueries.sort(), ['development', 'main', 'staging']);
+  assert.ok(c.warnings.some((w) => /main: .*pull requests required/.test(w)), c.warnings.join('\n'));
+});
+
+test('run skips only the branches whose rules enforce the review flow', async () => {
+  const fake = fakeGithub({
+    isPrivate: false,
+    rules: { main: FULL_RULES, staging: FULL_RULES, development: FULL_RULES.slice(1) },
+    activityPages: {
+      main: [[act('push', sha('8'), sha('9'))]],
+      development: [[act('push', sha('6'), sha('7'))]],
+    },
+  });
+  const v = await run({ github: fake.github, context, core: core(), now });
+  assert.deepEqual(v.map((x) => x.sha), [sha('7')]);
+  assert.ok(!fake.activityRequests.includes('refs/heads/main'));
+});
+
+test('run does nothing on a public repository whose branches are all protected', async () => {
+  const fake = fakeGithub({
+    isPrivate: false,
+    rules: ALL_PROTECTED,
+    activityPages: { main: [[act('push', sha('8'), sha('9'))]] },
+  });
+  const c = core();
+  assert.deepEqual(await run({ github: fake.github, context, core: c, now }), []);
   assert.equal(fake.activityRequests.length, 0);
+  assert.equal(c.failed, null);
+});
+
+test('run fails when the branch rules cannot be read', async () => {
+  const err = new Error('Resource not accessible by integration');
+  err.status = 403;
+  const fake = fakeGithub({ isPrivate: false, rules: { ...ALL_PROTECTED, staging: err } });
+  await assert.rejects(run({ github: fake.github, context, core: core(), now }), /not accessible/);
+});
+
+test('run audits every branch of a private repository without reading rules', async () => {
+  const fake = fakeGithub({ rules: ALL_PROTECTED, activityPages: { main: [[act('push', sha('8'), sha('9'))]] } });
+  const v = await run({ github: fake.github, context, core: core(), now });
+  assert.equal(v.length, 1);
+  assert.deepEqual(fake.rulesQueries, []);
 });
 
 test('run deduplicates against closed issues and passes once every finding is closed', async () => {

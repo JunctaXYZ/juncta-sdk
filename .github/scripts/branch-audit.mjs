@@ -3,8 +3,12 @@
 // issue per problem.
 //
 // Private repositories on our plan cannot enforce branch protection, so this
-// audit is how a direct push becomes visible. On a public repository, where
-// protection is enforced, the audit does nothing.
+// audit is how a direct push becomes visible. A public repository can, but
+// being public does not mean it does: each branch is skipped only when its
+// active rulesets require pull requests and the review-gate status and block
+// force pushes and deletion. Classic branch protection is not counted,
+// because the workflow token cannot read it. A rules lookup that fails stops
+// the run instead of skipping the audit.
 //
 // Two things here are deliberate:
 // - The audit is driven by the repository activity log, not by commit dates.
@@ -15,7 +19,7 @@
 //   review-gate commit status is never trusted here, because anyone with
 //   write access can post one.
 
-import { changedFiles, evaluate, loadConfig } from './review-gate.mjs';
+import { STATUS_CONTEXT, changedFiles, evaluate, loadConfig } from './review-gate.mjs';
 
 export const BRANCHES = ['main', 'staging', 'development'];
 export const LABEL = 'branch-audit';
@@ -27,6 +31,24 @@ const WINDOW_SLACK = HOUR;
 const DEFAULT_WINDOW = 7 * DAY;
 const PR_COMMIT_LIST_LIMIT = 250;
 const ZERO_SHA = /^0+$/;
+
+// Names each protection a branch's active rules lack. Leaving a branch
+// unaudited is safe only when GitHub itself requires pull requests and the
+// review-gate status, and refuses force pushes and deletion.
+export function missingProtection(rules) {
+  const types = new Set(rules.map((r) => r.type));
+  const gate = rules.some(
+    (r) =>
+      r.type === 'required_status_checks' &&
+      (r.parameters?.required_status_checks ?? []).some((c) => c.context === STATUS_CONTEXT),
+  );
+  const missing = [];
+  if (!types.has('pull_request')) missing.push('pull requests required');
+  if (!gate) missing.push(`${STATUS_CONTEXT} status required`);
+  if (!types.has('non_fast_forward')) missing.push('force pushes blocked');
+  if (!types.has('deletion')) missing.push('deletion blocked');
+  return missing;
+}
 
 export function issueTitle(branch, sha) {
   return `branch-audit: ${branch} ${sha.slice(0, 7)}`;
@@ -292,8 +314,28 @@ function apiLookups(github, owner, repo, branch, cutoff) {
 export default async function run({ github, context, core, now = new Date() }) {
   const { owner, repo } = context.repo;
   const { data: info } = await github.rest.repos.get({ owner, repo });
-  if (!info.private) {
-    core.info('Public repository: branch protection is enforced by GitHub, so there is nothing to audit.');
+  const audited = [];
+  for (const branch of BRANCHES) {
+    if (info.private) {
+      audited.push(branch);
+      continue;
+    }
+    const rules = await github.paginate(github.rest.repos.getBranchRules, {
+      owner,
+      repo,
+      branch,
+      per_page: 100,
+    });
+    const missing = missingProtection(rules);
+    if (missing.length === 0) {
+      core.info(`${branch}: rulesets enforce the review flow, so it is not audited.`);
+    } else {
+      core.warning(`${branch}: public, but its rulesets lack: ${missing.join(', ')}. Auditing it.`);
+      audited.push(branch);
+    }
+  }
+  if (audited.length === 0) {
+    core.info('Every branch is protected by rulesets; there is nothing to audit.');
     return [];
   }
 
@@ -310,7 +352,7 @@ export default async function run({ github, context, core, now = new Date() }) {
   const prCutoff = new Date(since.getTime() - DAY);
   const violations = [];
 
-  for (const branch of BRANCHES) {
+  for (const branch of audited) {
     const activities = await branchActivity(github, owner, repo, branch, since, period);
     core.info(`${branch}: ${activities.length} activity entries in the window`);
     const lookups = apiLookups(github, owner, repo, branch, prCutoff);
