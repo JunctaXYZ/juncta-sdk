@@ -1,0 +1,47 @@
+name: hygiene
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [development, staging, main]
+
+permissions: {}
+
+concurrency:
+  group: hygiene-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # The head commit, not the merge preview, so the commit range checked
+      # below is exactly the commits this pull request adds. Full history so
+      # the base commit is present for that range.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # A few seconds, so they run on every change rather than only when
+      # the script changes.
+      - name: Hygiene check tests
+        run: bash scripts/tests/hygiene_test.sh
+      - name: Check files, commit messages and pull request text
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          base="${PR_BASE_SHA:-$PUSH_BEFORE}"
+          # A push that creates a branch reports an all-zero "before". With
+          # no base the script checks everything since origin/development,
+          # and fails if that cannot be resolved.
+          case "$base" in *[!0]*) ;; *) base="" ;; esac
+          bash scripts/hygiene.sh "$base"

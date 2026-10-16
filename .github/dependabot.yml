@@ -1,0 +1,39 @@
+version: 2
+
+# Weekly, with minor and patch bumps grouped into one pull request per
+# ecosystem so review effort goes to majors. The cooldown waits a week after a
+# release before proposing it, which keeps us off versions that get yanked or
+# turn out to be compromised in their first days. Security updates are not
+# delayed by it.
+updates:
+  # Every repo: keeps the SHA pins and their version comments current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      npm:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: chore
+    # typescript-eslint and typedoc do not accept TypeScript 7 yet. Lift
+    # this when both list it in their peer ranges.
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7"]

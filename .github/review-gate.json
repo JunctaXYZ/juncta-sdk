@@ -1,0 +1,82 @@
+{
+  "always": [
+    "code-reviewer",
+    "qa-verifier",
+    "hygiene-auditor"
+  ],
+  "rules": [
+    {
+      "paths": [
+        "idl/**",
+        "src/generated/**"
+      ],
+      "require": [
+        "contract-security-auditor",
+        "exploit-tester"
+      ]
+    },
+    {
+      "paths": [
+        ".github/**",
+        "scripts/**",
+        "tools/**",
+        ".cargo/**",
+        "deny.toml",
+        "rust-toolchain.toml",
+        "**/Cargo.toml",
+        "**/Cargo.lock",
+        "**/go.mod",
+        "**/go.sum",
+        "**/package.json",
+        "**/pnpm-lock.yaml",
+        ".npmrc",
+        "**/uv.lock",
+        "**/requirements*.txt",
+        "xtask/**",
+        ".githooks/**",
+        "osv-scanner.toml",
+        ".semgrepignore",
+        ".semgrep.yml",
+        ".semgrep/**",
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        "**/.gitignore",
+        "coverage*",
+        "codecov.yml",
+        ".codecov.yml",
+        ".config/**",
+        "**/vitest.config.*",
+        "clippy.toml",
+        ".clippy.toml",
+        "**/.golangci.yml",
+        "**/.golangci.yaml",
+        "**/eslint.config.*",
+        "**/tsconfig*.json",
+        "typedoc.json",
+        "pnpm-workspace.yaml",
+        ".prettierignore",
+        ".prettierrc*",
+        "prettier.config.*",
+        ".nvmrc",
+        ".github/review-gate.json"
+      ],
+      "require": [
+        "security-reviewer"
+      ]
+    },
+    {
+      "labels": [
+        "economics"
+      ],
+      "require": [
+        "economic-risk-reviewer"
+      ]
+    }
+  ],
+  "hotfix": {
+    "base": "main",
+    "require": [
+      "release-approver"
+    ]
+  }
+}

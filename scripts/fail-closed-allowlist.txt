@@ -1,0 +1,4 @@
+# Lines allowed to swallow a failure, one per entry as `path:full line text`,
+# read by scripts/check-fail-closed.sh. Put a comment directly above each
+# entry, or group of entries, saying why ignoring the status is correct. An
+# entry that no longer matches fails the check: fix the line, then delete it.
