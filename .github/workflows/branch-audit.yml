@@ -1,0 +1,41 @@
+name: branch-audit
+
+# Private repositories on our plan have no server-side branch protection, so
+# this daily audit makes any change to main, staging or development that
+# skipped the review flow visible as an issue. Each run covers everything
+# since the last passing one, so missed runs leave no gap. On a public
+# repository a branch is skipped only when its rulesets require pull
+# requests and the review-gate status and block force pushes and deletion;
+# every other branch is audited.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: branch-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # past runs of this workflow, where the window starts
+      contents: read
+      pull-requests: read # merged pull requests, their files, commits and review comments
+      issues: write # one issue per finding, plus the label
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { default: audit } = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/branch-audit.mjs`);
+            await audit({ github, context, core });

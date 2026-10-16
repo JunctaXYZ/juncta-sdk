@@ -1,0 +1,52 @@
+name: review-gate
+
+# Both triggers run this file from the base or default branch, never from the
+# pull request, so a pull request cannot change the rules that judge it. The
+# job reads only data from the pull request (files, labels, comments) through
+# the API and never checks out or runs its code.
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] no PR code is checked out or run; only the base branch's script runs
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions: {}
+
+jobs:
+  gate:
+    name: evaluate
+    # Skip comments on plain issues and comments that never carried a marker,
+    # which keeps routine discussion from spending runner minutes. An edit
+    # that removes a marker still runs, because the old body had one.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+        (contains(github.event.comment.body, 'juncta-review') ||
+         contains(github.event.changes.body.from, 'juncta-review')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # One evaluation per pull request at a time. A newer evaluation re-reads
+    # everything, so cancelling the older one loses nothing. This sits on the
+    # job, not the workflow: a run whose job is skipped (a comment with no
+    # marker) then never joins the group and cannot cancel a real evaluation.
+    concurrency:
+      group: review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read # labels, changed files and comments
+      statuses: write # posts the review-gate status on the head commit
+    steps:
+      # github.sha is the base branch tip for pull_request_target and the
+      # default branch tip for issue_comment. Only the script folder is needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { default: gate } = await import(`${process.env.GITHUB_WORKSPACE}/.github/scripts/review-gate.mjs`);
+            await gate({ github, context, core });

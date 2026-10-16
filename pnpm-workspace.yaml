@@ -1,0 +1,7 @@
+# Settings for pnpm only; this repository is a single package.
+
+# Dependency install scripts run arbitrary code at install time. None is
+# allowed, and an unreviewed one fails the install instead of being skipped
+# with a warning nobody reads.
+strictDepBuilds: true
+onlyBuiltDependencies: []

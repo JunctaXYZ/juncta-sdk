@@ -1,0 +1,278 @@
+name: security
+
+# Private repositories share a small monthly pool of runner minutes, so the
+# cheap checks run in one job and the slower ones run only when the files they
+# look at changed, or on the weekly schedule that catches newly published
+# advisories.
+on:
+  pull_request:
+  push:
+    branches: [development, staging, main]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scan:
+    name: scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      workflows: ${{ steps.changes.outputs.workflows }}
+      scripts: ${{ steps.changes.outputs.scripts }}
+      deps: ${{ steps.changes.outputs.deps }}
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      # Full history: gitleaks scans the commits a change adds, and the
+      # change detection below diffs against the base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Work out what changed
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base="${PR_BASE_SHA:-$PUSH_BEFORE}"
+          case "$base" in *[!0]*) ;; *) base="" ;; esac
+          if [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ -z "$base" ] \
+            || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            # No reliable base: check everything.
+            printf 'workflows=true\nscripts=true\ndeps=true\ncode=true\nrange=\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Both sides of a rename, so moving a file out of a watched path
+          # still counts as a change to that path.
+          files=$(git diff --name-only --no-renames "$base...HEAD")
+          # has GREP_ARGS...: true when a changed file matches, false when
+          # none does. grep exits 1 for no match; any other status is an
+          # error and fails the step, never a quiet "nothing changed". Each
+          # result is assigned before it is used, because a failure inside
+          # $(...) within a larger command does not stop the step.
+          has() {
+            local status=0
+            grep -q "$@" <<<"$files" || status=$?
+            case "$status" in
+              0) echo true ;;
+              1) echo false ;;
+              *) echo "grep failed (exit $status) on the changed files" >&2; exit 1 ;;
+            esac
+          }
+          # Dependency audits run when dependencies change and also when the
+          # policy around them changes: manifests, toolchain pins, registry
+          # config, vendored tools, and this workflow itself. Otherwise a pull
+          # request could loosen an audit without the audit running.
+          deps_re='(^|/)(Cargo\.(lock|toml)|go\.(mod|sum)|pnpm-lock\.yaml|package\.json|pnpm-workspace\.yaml|\.npmrc|\.nvmrc|uv\.lock|requirements[^/]*\.txt|deny\.toml|rust-toolchain(\.toml)?)$'
+          deps_re="$deps_re"'|(^|/)\.cargo/|^tools/|^\.github/workflows/security\.yml$|^\.github/dependabot\.yml$'
+          # Semgrep skips a change only when every file in it is prose or an
+          # image. Listing what to skip, rather than which languages to scan,
+          # means a new language or a semgrep config file (.semgrepignore,
+          # .semgrep.yml, .semgrep/) is scanned without anyone remembering
+          # to add it here. An empty line is not a file.
+          prose_re='\.(md|txt|png|jpe?g|gif|svg|ico|webp)$|^LICENSE[^/]*$'
+          workflows=$(has -E '^\.github/')
+          scripts=$(has -E '^(\.github|scripts)/')
+          deps=$(has -E "$deps_re")
+          code=$(has -Ev "$prose_re|^\$")
+          printf 'workflows=%s\nscripts=%s\ndeps=%s\ncode=%s\nrange=%s\n' \
+            "$workflows" "$scripts" "$deps" "$code" "$base..HEAD" >> "$GITHUB_OUTPUT"
+
+      # The tool archives are cached; the install script re-verifies their
+      # checksums on every run, so the cache only saves download time.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ci-tools
+          key: ci-tools-${{ runner.os }}-${{ hashFiles('scripts/install-ci-tools.sh') }}
+
+      - name: Install gitleaks and actionlint
+        run: bash scripts/install-ci-tools.sh gitleaks actionlint
+
+      # Pull requests and pushes scan only the commits they add. The weekly
+      # run scans all history, which catches rules added since a commit landed.
+      - name: gitleaks
+        env:
+          RANGE: ${{ steps.changes.outputs.range }}
+        run: |
+          if [ -n "$RANGE" ]; then
+            gitleaks git --no-banner --redact --exit-code 1 --log-opts="$RANGE" .
+          else
+            gitleaks git --no-banner --redact --exit-code 1 .
+          fi
+
+      # Both take well under a second and need nothing installed, so they
+      # run on every change rather than trusting the filter above.
+      - name: Only review-gate.yml may post commit statuses
+        run: bash scripts/check-workflow-permissions.sh
+
+      - name: No check swallows a failure
+        run: bash scripts/check-fail-closed.sh
+
+      # Checksummed by the action's own manifest. No fallback: a tool the
+      # manifest does not cover fails here instead of being built from
+      # crates.io without a checksum. Installed before actionlint, which
+      # runs whichever shellcheck is first on PATH over every run: block.
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        if: >-
+          steps.changes.outputs.workflows == 'true' || steps.changes.outputs.scripts == 'true' ||
+          steps.changes.outputs.deps == 'true'
+        with:
+          tool: zizmor@1.30.1,osv-scanner@2.6.0,shellcheck@0.11.0
+          fallback: none
+
+      # The runner image ships its own shellcheck. This fails if that one,
+      # or any other, is the one on PATH.
+      - name: Check the shellcheck version
+        if: steps.changes.outputs.workflows == 'true' || steps.changes.outputs.scripts == 'true'
+        run: |
+          got=$(shellcheck --version | sed -n 's/^version: //p')
+          if [ "$got" != 0.11.0 ]; then
+            echo "shellcheck $got is first on PATH, not the pinned 0.11.0" >&2
+            exit 1
+          fi
+
+      - name: actionlint
+        if: steps.changes.outputs.workflows == 'true'
+        run: actionlint -color
+
+      # Online audits look up action tags and known advisories, which needs a
+      # token. It is read-only and scoped to this job.
+      - name: zizmor
+        if: steps.changes.outputs.workflows == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --format=github .github/
+
+      - name: shellcheck
+        if: steps.changes.outputs.scripts == 'true'
+        run: shellcheck scripts/*.sh scripts/tests/*.sh
+
+      - name: Script tests
+        if: steps.changes.outputs.scripts == 'true'
+        run: |
+          node --test .github/scripts/*.test.mjs
+          for t in security_filter workflow_permissions fail_closed; do
+            bash "scripts/tests/${t}_test.sh"
+          done
+
+      - name: osv-scanner
+        if: steps.changes.outputs.deps == 'true'
+        run: osv-scanner scan source --recursive --allow-no-lockfiles .
+
+  # Community rules only, with telemetry off. CodeQL covers public
+  # repositories; this is the static analysis private repositories can run.
+  # It runs on every change that touches code or its own config, since a
+  # finding in new code is what it is for.
+  semgrep:
+    name: semgrep
+    needs: scan
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      needs.scan.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      image: semgrep/semgrep:1.179.0@sha256:93963d9295a366f59e4850127b1550400ee7b388f04fe144e4a1f6325d96e01b
+    env:
+      SEMGREP_RULESETS: p/github-actions p/typescript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: semgrep
+        run: |
+          set -f
+          args=""
+          for r in $SEMGREP_RULESETS; do args="$args --config $r"; done
+          # shellcheck disable=SC2086
+          semgrep scan --metrics=off --error $args .
+
+  # Runs when dependencies or their policy change, and weekly. pnpm comes
+  # through corepack, which checks it against the sha512 in packageManager.
+  node-audit:
+    name: node-audit
+    needs: scan
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      needs.scan.outputs.deps == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      npm_config_update_notifier: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Set up pnpm
+        run: corepack enable pnpm
+      - name: pnpm audit
+        run: pnpm audit --audit-level low
+
+  # Public repositories get CodeQL at no cost. It runs on the same changes as
+  # semgrep, and weekly; the two find different things. The job fails on any
+  # result itself, so it does not depend on code scanning settings.
+  codeql:
+    name: codeql
+    needs: scan
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      needs.scan.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write # uploads results to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:javascript-typescript
+          output: ${{ runner.temp }}/codeql
+      - name: No CodeQL results
+        env:
+          SARIF_DIR: ${{ runner.temp }}/codeql
+        run: |
+          shopt -s nullglob
+          files=("$SARIF_DIR"/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no SARIF output in $SARIF_DIR" >&2
+            exit 1
+          fi
+          count=$(jq -s '[.[].runs[].results[]] | length' "${files[@]}")
+          if [ "$count" -ne 0 ]; then
+            jq -r '.runs[].results[] | "\(.ruleId): \(.message.text) at \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"' "${files[@]}" >&2
+            echo "CodeQL reported $count results" >&2
+            exit 1
+          fi
+          echo "CodeQL: no results"
