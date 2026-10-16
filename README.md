@@ -39,12 +39,14 @@ pnpm test
 | `pnpm lint`                 | eslint with type information, zero warnings allowed                     |
 | `pnpm format:check`         | prettier check                                                          |
 | `pnpm coverage`             | Tests with coverage; fails under the committed `coverage-baseline.json` |
-| `pnpm publint`, `pnpm attw` | Check the packed package's `exports` and types (run `pnpm build` first) |
+| `pnpm publint`, `pnpm attw` | Pack the package (which builds it) and check its `exports` and types    |
 | `pnpm run docs:api`         | API reference as markdown in `docs/api/`; any warning fails it          |
 
 `scripts/gate.sh` is the full local gate and runs every check CI runs, including gitleaks, osv-scanner, semgrep (through Docker), actionlint, zizmor and the script self-tests. It also needs gitleaks 8.30.1, actionlint 1.7.12 (both installed with checksums by `scripts/install-ci-tools.sh`), zizmor 1.30.1, osv-scanner 2.6.0, shellcheck 0.11.0, perl and Docker. `scripts/precommit.sh` runs the fast subset.
 
-The coverage floor is 85 percent of lines and branches, or the baseline in `coverage-baseline.json` if that is higher. The gate refuses a baseline lower than the one on the base branch, so raise it when coverage rises and never lower it.
+The coverage floor is 85 percent of lines and branches, or the baseline in `coverage-baseline.json` if that is higher. `scripts/check-coverage-baseline.mjs` enforces it from the measured coverage (`coverage/coverage-summary.json`), separately from the vitest thresholds, and refuses a baseline lower than the one on the base branch.
+
+The baseline starts at 85 for both, the required minimum, because the package has almost no code to measure yet. Raise it in the change that proves the higher coverage, to a figure a little under what was measured. Lowering it is possible only on purpose, never below 85: the same pull request adds a `"reason"` to `coverage-baseline.json` that differs from the one on the base branch, explains it in the description, and passes security review, which every change to that file requires.
 
 Release notes use changesets (`pnpm exec changeset`). Nothing publishes from this repository yet.
 
