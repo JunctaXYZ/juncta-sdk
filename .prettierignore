@@ -1,0 +1,6 @@
+dist/
+coverage/
+docs/api/
+pnpm-lock.yaml
+# Shared with the other repositories and kept identical to those copies.
+.github/
